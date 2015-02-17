@@ -1,0 +1,84 @@
+#!/usr/bin/ruby
+require 'time'
+require 'date'
+require 'mail'
+require 'pp'
+require 'maildir'
+
+# create maildirs with symlinks to emails?
+$maildir = true
+
+# Paths
+SENT_MAILS = '/home/lucas/IMAPMail/Sent/cur/*'
+RECV_MAILS = '/home/lucas/IMAPMail/zz.*/*/*'
+
+mindate = Time::parse(ARGV[0])
+mails = []
+mindated = mindate.to_datetime
+files = Dir::glob(SENT_MAILS)
+files.each do |f|
+  next if File::stat(f).mtime < mindate
+  mail = Mail::read(f)
+  next if mail.date < mindated
+  mails << { :from => mail.from[0].to_s, :to => mail.to, :cc => mail.cc, :subject => mail.subject.to_s, :date => mail.date, :msgid => mail.message_id.to_s, :mail => IO::read(f) }
+end
+
+ids = mails.map { |m| m[:msgid] }
+$replied = []
+files = Dir::glob(RECV_MAILS)
+files.each do |f|
+  next if File::stat(f).mtime < mindate
+  mail = Mail::read(f)
+  next if mail.date.nil? or mail.date < mindated
+  irt = mail.in_reply_to
+  next if not ids.include?(irt)
+  $replied << mail.in_reply_to
+end
+
+$sbjlen = mails.map { |e| e[:subject].length }.max || 0
+$sbjlen = 80 if $sbjlen > 80
+
+def fmail(adr)
+  adr = adr.map do |e|
+    e = e.downcase
+    e = e.gsub('@inria.fr', '@i.f')
+    e = e.gsub('debian.org', 'd.o')
+    e = e.gsub('@loria.fr', '@l.f')
+    e = e.gsub('@lists.debian.org', '@l.d.o')
+    e = e.gsub('@lists.alioth.debian.org', '@l.a.d.o')
+    e = e.gsub('univ-lorraine.fr', 'u-l.f')
+    e = e.gsub(/^debian-/, 'd-')
+    e
+  end
+  adr.join(' ')
+end
+
+def show_mails(mails, adr)
+  return if adr.empty?
+  mails = mails.select { |m| adr.include?(m[:from]) }
+  puts "#"*30 + ' ' + adr.join(' ').to_s + ' ' + "(#{mails.length} mails) " + "#"*30
+  mails = mails.select { |m| adr.include?(m[:from]) }
+  mails = mails.sort { |a,b| a[:date] <=> b[:date] }
+  mails.each do |m|
+    m[:to] = [ m[:to]] if m[:to].kind_of? String
+    m[:cc] = [ m[:cc]] if m[:cc].kind_of? String
+    puts "%s %s | %-22s | %-#{$sbjlen}s | %s" % [ m[:date].strftime("%F"), $replied.include?(m[:msgid])?'R':' ', m[:msgid].gsub('@xanadu.blop.info', ''), m[:subject], fmail(m[:to]+(m[:cc]||[])) ]
+  end
+  if $maildir
+    d = `mktemp -d /tmp/mails.XXXXXX`.chomp
+    md = Maildir::new(d)
+    mails.each do |m|
+      md.add(m[:mail])
+    end
+    puts "### Mails written to #{d} ###"
+  end
+end
+
+
+show_mails(mails, ['lucas@lucas-nussbaum.net'])
+show_mails(mails, ['lucas@debian.org'])
+show_mails(mails, ['leader@debian.org'])
+show_mails(mails, ['lucas.nussbaum@loria.fr', 'lucas.nussbaum@univ-lorraine.fr'])
+show_mails(mails, mails.map { |e| e[:from]}.uniq - ['lucas@lucas-nussbaum.net', 'lucas@debian.org', 'leader@debian.org', 'lucas.nussbaum@loria.fr', 'lucas.nussbaum@univ-lorraine.fr'])
+
+
